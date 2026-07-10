@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset='utf-8'>
+    <title>Dashboard IoT Distant</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <!-- Importation de la librairie MQTT pour navigateur -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 10px; }
+        .container { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); }
+        h1 { color: #0055ff; text-align:center; } 
+        h2 { color: #0055ff; margin-top: 0; display:flex; align-items:center; }
+        .ok { color: #2ecc71; font-weight: bold; } 
+        .err { color: #e74c3c; font-weight: bold; }
+        .warning { color: #f39c12; font-weight: bold; }
+        .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-right: 10px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #0055ff; } 
+        input:checked + .slider:before { transform: translateX(20px); }
+        .station-body { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px; }
+        .col { flex: 1; min-width: 280px; }
+        .header-panel { display:flex; justify-content:center; align-items:center; margin-bottom:20px; }
+        .header-box { background:white; padding:15px 25px; border-radius:8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display:flex; gap:20px; align-items:center; font-size:16px; }
+    </style>
+</head>
+<body>
+
+    <h1>Console SERVEUR IoT <span style="color: #e74c3c; font-size: 0.6em;">(ACCÈS DISTANT)</span></h1>
+
+    <div class="header-panel">
+        <div class="header-box">
+            <div><b>Serveur MQTT : </b><span id='mqtt_status' class="warning">Connexion en cours...</span></div>
+            <div style="border-left:2px solid #eee; height:30px;"></div>
+            <div><b>Dernière maj : </b><span id='sys_time'>--</span></div>
+        </div>
+    </div>
+
+    <div class='container' id='main_container'></div>
+
+    <script>
+        // État mémoire local pour stocker les données reçues via MQTT
+        let state = {
+            1: { active: true, alive: false, lastSeen: 0, temp: '--', hum: '--', c30: '--', c40: '--', no2: '--', co: '--', voc: '--', alc: '--', lm32: '--' },
+            2: { active: true, alive: false, lastSeen: 0, temp: '--', hum: '--', c30: '--', c40: '--', no2: '--', co: '--', voc: '--', alc: '--', lm32: '--' },
+            3: { active: true, alive: false, lastSeen: 0, temp: '--', hum: '--', c30: '--', c40: '--', no2: '--', co: '--', voc: '--', alc: '--', lm32: '--' }
+        };
+
+        // 1. Génération de l'interface graphique (Lecture seule pour la configuration matérielle)
+        function buildUI() {
+            let html = '';
+            for (let i = 1; i <= 3; i++) {
+                html += `
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2 style="margin:0;">Station ${i} <span id="st${i}_status" style="font-size:14px; font-weight:normal; margin-left:15px;">- En attente de données...</span></h2>
+                        <div style="display:flex; align-items:center;">
+                            <b style="margin-right:10px;">Afficher</b>
+                            <label class="switch"><input type="checkbox" checked onchange="toggleStation(${i}, this.checked)"><span class="slider"></span></label>
+                        </div>
+                    </div>
+
+                    <div id="st${i}_content" class="station-body">
+                        <div class="col" style="background:#e8f4f8; padding:15px; border-radius:8px; min-height:80px;">
+                            <h3 style="margin-top:0;">Données en direct</h3>
+                            <div id="st${i}_data">--</div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+            document.getElementById("main_container").innerHTML = html;
+        }
+
+        // 2. Fonction pour cacher/afficher visuellement une station
+        function toggleStation(id, isVisible) {
+            state[id].active = isVisible;
+            document.getElementById('st' + id + '_content').style.display = isVisible ? 'flex' : 'none';
+        }
+
+        // 3. Mise à jour de l'affichage avec les valeurs en mémoire
+        function updateUI() {
+            let now = new Date();
+            document.getElementById('sys_time').innerText = now.toLocaleTimeString('fr-FR');
+
+            let currentMillis = Date.now();
+
+            for (let i = 1; i <= 3; i++) {
+                let st = state[i];
+                
+                // Si on n'a rien reçu depuis 10 secondes, la station est considérée hors ligne
+                if (st.alive && (currentMillis - st.lastSeen > 10000)) {
+                    st.alive = false;
+                }
+
+                if (!st.active) continue; // Si l'utilisateur l'a masquée, on passe
+
+                let isAliveHtml = st.alive ? "<span class='ok'>Connectée (En direct)</span>" : "<span class='err'>Hors Ligne (Signal perdu)</span>";
+                document.getElementById('st' + i + '_status').innerHTML = "- WiFi: " + isAliveHtml;
+
+                let dataHTML = "";
+                if (st.temp !== '--') dataHTML += `<p><b>SHT3X</b> : ${st.temp}°C | ${st.hum}%</p>`;
+                if (st.c30 !== '--') dataHTML += `<p><b>SCD30</b> : ${parseFloat(st.c30).toFixed(0)} ppm</p>`;
+                if (st.c40 !== '--') dataHTML += `<p><b>SCD40</b> : ${st.c40} ppm</p>`;
+                if (st.no2 !== '--') dataHTML += `<p><b>GAS</b> : NO2:${st.no2} CO:${st.co} VOC:${st.voc}</p>`;
+                if (st.lm32 !== '--') dataHTML += `<p><b>LM32</b> : ${st.lm32}°C</p>`;
+
+                if (dataHTML === "") dataHTML = "<i>En attente des premiers capteurs...</i>";
+                
+                document.getElementById('st' + i + '_data').innerHTML = dataHTML;
+            }
+        }
+
+        // 4. CONNEXION MQTT VIA WEBSOCKETS
+        // On utilise wss:// pour le port sécurisé 8081 (obligatoire si on héberge le html sur HTTPS)
+        const clientId = 'web_dashboard_' + Math.random().toString(16).substr(2, 8);
+        const host = 'wss://test.mosquitto.org:8081/mqtt';
+
+        const options = {
+            keepalive: 60,
+            clientId: clientId,
+            protocolId: 'MQTT',
+            protocolVersion: 4,
+            clean: true,
+            reconnectPeriod: 1000,
+            connectTimeout: 30 * 1000,
+        };
+
+        console.log('Connexion au broker MQTT...');
+        const client = mqtt.connect(host, options);
+
+        client.on('connect', function () {
+            console.log('Connecté à test.mosquitto.org !');
+            let statusBadge = document.getElementById('mqtt_status');
+            statusBadge.innerText = "Connecté";
+            statusBadge.className = "ok";
+            
+            // On s'abonne à tous les topics de notre projet !
+            client.subscribe('mon_projet_etudiant/#', function (err) {
+                if (!err) {
+                    console.log('Abonnement réussi !');
+                }
+            });
+        });
+
+        client.on('error', function (error) {
+            console.error('Erreur MQTT:', error);
+            let statusBadge = document.getElementById('mqtt_status');
+            statusBadge.innerText = "Erreur Serveur";
+            statusBadge.className = "err";
+        });
+
+        client.on('offline', function () {
+            let statusBadge = document.getElementById('mqtt_status');
+            statusBadge.innerText = "Déconnecté";
+            statusBadge.className = "err";
+        });
+
+        // 5. RÉCEPTION DES MESSAGES MQTT EN TEMPS RÉEL
+        client.on('message', function (topic, message) {
+            // Le topic ressemble à : "mon_projet_etudiant/station1/temp"
+            let topicParts = topic.split('/');
+            
+            if (topicParts.length === 3 && topicParts[0] === 'mon_projet_etudiant') {
+                let stationName = topicParts[1]; // ex: "station1"
+                let sensorName = topicParts[2];  // ex: "temp"
+                let value = message.toString();
+
+                // Extraction du numéro de la station (1, 2 ou 3)
+                let stationId = parseInt(stationName.replace('station', ''));
+
+                if (stationId >= 1 && stationId <= 3) {
+                    // On met à jour la mémoire de cette station
+                    state[stationId].alive = true;
+                    state[stationId].lastSeen = Date.now();
+
+                    // Mappage des noms MQTT vers nos variables locales
+                    if (sensorName === 'temp') state[stationId].temp = value;
+                    else if (sensorName === 'hum') state[stationId].hum = value;
+                    else if (sensorName === 'co2_scd30') state[stationId].c30 = value;
+                    else if (sensorName === 'co2_scd40') state[stationId].c40 = value;
+                    else if (sensorName === 'no2') state[stationId].no2 = value;
+                    else if (sensorName === 'co') state[stationId].co = value;
+                    else if (sensorName === 'voc') state[stationId].voc = value;
+                    else if (sensorName === 'alc') state[stationId].alc = value;
+                    else if (sensorName === 'lm32') state[stationId].lm32 = value;
+                }
+            }
+        });
+
+        // Initialisation
+        buildUI();
+        
+        // Boucle de rafraîchissement visuel toutes les secondes
+        setInterval(updateUI, 1000);
+
+    </script>
+</body>
+</html>
