@@ -4,8 +4,9 @@
     <meta charset='utf-8'>
     <title>Dashboard IoT Distant</title>
     <meta name='viewport' content='width=device-width, initial-scale=1'>
-    <!-- Importation de la librairie MQTT pour navigateur -->
+    <!-- Importation des librairies MQTT et Chart.js -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 10px; }
         .container { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
@@ -49,7 +50,10 @@
             3: { active: true, alive: false, lastSeen: 0, temp: '--', hum: '--', c30: '--', c40: '--', no2: '--', co: '--', voc: '--', alc: '--', lm32: '--' }
         };
 
-        // 1. Génération de l'interface graphique (Lecture seule pour la configuration matérielle)
+        const maxDataPoints = 60; 
+        let charts = {};
+
+        // 1. Génération de l'interface graphique
         function buildUI() {
             let html = '';
             for (let i = 1; i <= 3; i++) {
@@ -67,23 +71,53 @@
                         <div class="col" style="background:#e8f4f8; padding:15px; border-radius:8px; min-height:80px;">
                             <h3 style="margin-top:0;">Données en direct</h3>
                             <div id="st${i}_data">--</div>
+                            
+                            <!-- AJOUT DU GRAPHIQUE -->
+                            <div style="width:100%; height:200px; background:white; padding:10px; border-radius:8px; border:1px solid #ddd; margin-top:15px;">
+                                <canvas id="chart_st${i}"></canvas>
+                            </div>
                         </div>
                     </div>
                 </div>`;
             }
             document.getElementById("main_container").innerHTML = html;
+            initCharts();
         }
 
-        // 2. Fonction pour cacher/afficher visuellement une station
+        // 2. Initialisation des Graphiques
+        function initCharts() {
+            for(let i=1; i<=3; i++) {
+                let ctx = document.getElementById('chart_st'+i).getContext('2d');
+                charts[i] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [], 
+                        datasets: [
+                            { label: 'Temp SHT3X (°C)', borderColor: '#e74c3c', data: [], tension: 0.3, pointRadius: 2 },
+                            { label: 'Temp LM35 (°C)', borderColor: '#3498db', data: [], tension: 0.3, pointRadius: 2 }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false, 
+                        scales: { y: { suggestedMin: 15, suggestedMax: 35 } } 
+                    }
+                });
+            }
+        }
+
+        // 3. Fonction pour cacher/afficher visuellement une station
         function toggleStation(id, isVisible) {
             state[id].active = isVisible;
             document.getElementById('st' + id + '_content').style.display = isVisible ? 'flex' : 'none';
         }
 
-        // 3. Mise à jour de l'affichage avec les valeurs en mémoire
+        // 4. Mise à jour de l'affichage avec les valeurs en mémoire
         function updateUI() {
             let now = new Date();
-            document.getElementById('sys_time').innerText = now.toLocaleTimeString('fr-FR');
+            let timeStr = now.toLocaleTimeString('fr-FR');
+            document.getElementById('sys_time').innerText = timeStr;
 
             let currentMillis = Date.now();
 
@@ -95,7 +129,25 @@
                     st.alive = false;
                 }
 
-                if (!st.active) continue; // Si l'utilisateur l'a masquée, on passe
+                // MISE A JOUR DU GRAPHIQUE (Même si la station est masquée)
+                if (charts[i] && st.alive) {
+                    charts[i].data.labels.push(timeStr);
+                    
+                    let tSht = st.temp !== '--' ? parseFloat(st.temp) : null;
+                    let tLm = st.lm32 !== '--' ? parseFloat(st.lm32) : null;
+                    
+                    charts[i].data.datasets[0].data.push(tSht);
+                    charts[i].data.datasets[1].data.push(tLm);
+
+                    if (charts[i].data.labels.length > maxDataPoints) {
+                        charts[i].data.labels.shift();
+                        charts[i].data.datasets[0].data.shift();
+                        charts[i].data.datasets[1].data.shift();
+                    }
+                    charts[i].update();
+                }
+
+                if (!st.active) continue; // Si l'utilisateur l'a masquée, on passe le texte
 
                 let isAliveHtml = st.alive ? "<span class='ok'>Connectée (En direct)</span>" : "<span class='err'>Hors Ligne (Signal perdu)</span>";
                 document.getElementById('st' + i + '_status').innerHTML = "- WiFi: " + isAliveHtml;
@@ -113,8 +165,7 @@
             }
         }
 
-        // 4. CONNEXION MQTT VIA WEBSOCKETS
-        // On utilise wss:// pour le port sécurisé 8081 (obligatoire si on héberge le html sur HTTPS)
+        // 5. CONNEXION MQTT VIA WEBSOCKETS
         const clientId = 'web_dashboard_' + Math.random().toString(16).substr(2, 8);
         const host = 'wss://test.mosquitto.org:8081/mqtt';
 
@@ -137,11 +188,8 @@
             statusBadge.innerText = "Connecté";
             statusBadge.className = "ok";
             
-            // On s'abonne à tous les topics de notre projet !
             client.subscribe('mon_projet_etudiant/#', function (err) {
-                if (!err) {
-                    console.log('Abonnement réussi !');
-                }
+                if (!err) console.log('Abonnement réussi !');
             });
         });
 
@@ -158,25 +206,21 @@
             statusBadge.className = "err";
         });
 
-        // 5. RÉCEPTION DES MESSAGES MQTT EN TEMPS RÉEL
+        // 6. RÉCEPTION DES MESSAGES MQTT EN TEMPS RÉEL
         client.on('message', function (topic, message) {
-            // Le topic ressemble à : "mon_projet_etudiant/station1/temp"
             let topicParts = topic.split('/');
             
             if (topicParts.length === 3 && topicParts[0] === 'mon_projet_etudiant') {
-                let stationName = topicParts[1]; // ex: "station1"
-                let sensorName = topicParts[2];  // ex: "temp"
+                let stationName = topicParts[1];
+                let sensorName = topicParts[2];
                 let value = message.toString();
 
-                // Extraction du numéro de la station (1, 2 ou 3)
                 let stationId = parseInt(stationName.replace('station', ''));
 
                 if (stationId >= 1 && stationId <= 3) {
-                    // On met à jour la mémoire de cette station
                     state[stationId].alive = true;
                     state[stationId].lastSeen = Date.now();
 
-                    // Mappage des noms MQTT vers nos variables locales
                     if (sensorName === 'temp') state[stationId].temp = value;
                     else if (sensorName === 'hum') state[stationId].hum = value;
                     else if (sensorName === 'co2_scd30') state[stationId].c30 = value;
@@ -192,8 +236,6 @@
 
         // Initialisation
         buildUI();
-        
-        // Boucle de rafraîchissement visuel toutes les secondes
         setInterval(updateUI, 1000);
 
     </script>
