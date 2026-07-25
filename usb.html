@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset='utf-8'>
+    <title>Dashboard IoT Distant (USB)</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 10px; }
+        .container { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); margin-bottom: 20px; }
+        h1 { color: #0055ff; text-align:center; } 
+        h2 { color: #0055ff; margin-top: 0; display:flex; align-items:center; }
+        .ok { color: #2ecc71; font-weight: bold; } 
+        .err { color: #e74c3c; font-weight: bold; }
+        .warning { color: #f39c12; font-weight: bold; }
+        .station-body { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px; }
+        .col { flex: 1; min-width: 280px; }
+        .header-panel { display:flex; justify-content:center; align-items:center; margin-bottom:20px; }
+        .header-box { background:white; padding:15px 25px; border-radius:8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display:flex; gap:20px; align-items:center; font-size:16px; }
+        .btn-row { display: flex; gap: 10px; margin-top: 15px; }
+        .btn-action { color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size:12px; flex: 1; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
+        .btn-action:hover { opacity: 0.8; transform: scale(0.98); }
+        .btn-start { background: #3498db; }
+        .btn-stop { background: #e67e22; }
+        .btn-clear { background: #e74c3c; }
+        .btn-dl { background: #2ecc71; width: 100%; margin-top: 10px; }
+        .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-right: 10px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #0055ff; } 
+        input:checked + .slider:before { transform: translateX(20px); }
+    </style>
+</head>
+<body>
+
+    <h1>Console SERVEUR IoT <span style="color: #e74c3c; font-size: 0.6em;">(PONT USB CLOUD)</span></h1>
+
+    <div class="header-panel">
+        <div class="header-box">
+            <div><b>Serveur API : </b><span id='mqtt_status' class="warning">Recherche de données...</span></div>
+            <div style="border-left:2px solid #eee; height:30px;"></div>
+            <div><b>Dernière maj : </b><span id='sys_time'>--</span></div>
+        </div>
+    </div>
+
+    <div class='container' id='main_container'></div>
+
+    <script>
+        // Le stockage "Universel"
+        let state = {}; 
+        let webLogState = {}; 
+        let historiqueCSV = {}; 
+        const maxDataPoints = 60; 
+        let charts = {};
+
+        // Génère le code HTML d'une station de manière dynamique
+        function createStationUI(id) {
+            let container = document.getElementById("main_container");
+            
+            let html = `
+            <div class="card" id="station_block_${id}">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0; text-transform: capitalize;">Station ${id} <span id="st${id}_status" style="font-size:14px; font-weight:normal; margin-left:15px;">- Connexion établie !</span></h2>
+                    <div style="display:flex; align-items:center;">
+                        <b style="margin-right:10px;">Afficher</b>
+                        <label class="switch"><input type="checkbox" checked onchange="document.getElementById('st${id}_content').style.display = this.checked ? 'flex' : 'none'"><span class="slider"></span></label>
+                    </div>
+                </div>
+
+                <div id="st${id}_content" class="station-body">
+                    <div class="col" style="background:#e8f4f8; padding:15px; border-radius:8px; min-height:80px;">
+                        <h3 style="margin-top:0;">Données en direct</h3>
+                        <div id="st${id}_data">--</div>
+                        
+                        <div style="width:100%; height:200px; background:white; padding:10px; border-radius:8px; border:1px solid #ddd; margin-top:15px;">
+                            <canvas id="chart_st${id}"></canvas>
+                        </div>
+                        
+                        <div class="btn-row">
+                            <button id="btn_weblog_${id}" class="btn-action btn-start" onclick="toggleWebLog('${id}')">Démarrer stockage</button>
+                            <button class="btn-action btn-clear" onclick="clearWebLog('${id}')">Vider</button>
+                        </div>
+                        <button class="btn-action btn-dl" onclick="exportCSV('${id}')">Télécharger l'historique complet</button>
+                        <div style="text-align:center; font-size:11px; color:#777; margin-top:5px;" id="st${id}_compteur">0 points en mémoire</div>
+                    </div>
+                </div>
+            </div>`;
+            
+            container.insertAdjacentHTML('beforeend', html);
+
+            let ctx = document.getElementById('chart_st'+id).getContext('2d');
+            charts[id] = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [] }, // Le graph se construira tout seul !
+                options: { responsive: true, maintainAspectRatio: false, animation: false }
+            });
+        }
+
+        function toggleWebLog(id) {
+            webLogState[id] = !webLogState[id];
+            let btn = document.getElementById('btn_weblog_' + id);
+            if (webLogState[id]) {
+                btn.innerHTML = 'Arrêter stockage'; btn.className = 'btn-action btn-stop';
+            } else {
+                btn.innerHTML = 'Démarrer stockage'; btn.className = 'btn-action btn-start';
+            }
+        }
+
+        function clearWebLog(id) {
+            if (confirm(`Voulez-vous vraiment vider la mémoire Web de la Station ${id} ?`)) {
+                historiqueCSV[id] = [];
+                document.getElementById('st'+id+'_compteur').innerText = "0 points en mémoire";
+            }
+        }
+
+        // Le CSV devient Universel ! Il lit la config JSON pour créer l'en-tête automatiquement
+        function exportCSV(id) {
+            if (historiqueCSV[id].length === 0) {
+                alert("Aucune donnée à télécharger pour l'instant.");
+                return;
+            }
+            let st = state[id];
+            
+            let csvContent = "Heure";
+            if (st.config && st.config.sensors) {
+                st.config.sensors.forEach(sens => {
+                    csvContent += `;${sens.n} (${sens.u})`;
+                });
+            }
+            csvContent += "\n";
+
+            historiqueCSV[id].forEach(row => {
+                csvContent += row.time;
+                if (st.config && st.config.sensors) {
+                    st.config.sensors.forEach(sens => {
+                        let val = row.data[sens.id] !== undefined ? row.data[sens.id] : "";
+                        csvContent += `;${val}`;
+                    });
+                }
+                csvContent += "\n";
+            });
+
+            let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            let link = document.createElement("a");
+            link.setAttribute("href", URL.createObjectURL(blob));
+            link.setAttribute("download", `Historique_Web_Station_${id}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function updateUI() {
+            let timeStr = new Date().toLocaleTimeString('fr-FR');
+            document.getElementById('sys_time').innerText = timeStr;
+            let currentMillis = Date.now();
+
+            for (let id in state) {
+                let st = state[id];
+                if (st.alive && (currentMillis - st.lastSeen > 10000)) st.alive = false;
+
+                // Enregistrement CSV en arrière-plan
+                if (st.alive && st.lastSeen !== st.lastRecorded) {
+                    if (webLogState[id]) {
+                        historiqueCSV[id].push({
+                            time: timeStr,
+                            data: { ...st.data } // Copie propre des données brutes
+                        });
+                        document.getElementById('st'+id+'_compteur').innerText = historiqueCSV[id].length + " points en mémoire";
+                    }
+                    st.lastRecorded = st.lastSeen;
+                }
+
+                let isAliveHtml = st.alive ? "<span class='ok'>Connectée (En direct)</span>" : "<span class='err'>Hors Ligne (Signal perdu)</span>";
+                document.getElementById('st' + id + '_status').innerHTML = "- " + isAliveHtml;
+
+                // Affichage Texte
+                let dataHTML = "";
+                if (st.config && st.config.sensors) {
+                    st.config.sensors.forEach(sens => {
+                        let val = st.data[sens.id] !== undefined ? st.data[sens.id] : "--";
+                        dataHTML += `<p><b>${sens.n}</b> : ${val} ${sens.u}</p>`;
+                    });
+                }
+                if (dataHTML === "") dataHTML = "<i>En attente des capteurs...</i>";
+                document.getElementById('st' + id + '_data').innerHTML = dataHTML;
+
+                // Affichage Graphique Universel (trace tout ce qui est en °C)
+                if (charts[id] && st.alive && st.config && st.config.sensors) {
+                    charts[id].data.labels.push(timeStr);
+                    
+                    st.config.sensors.forEach((sens, index) => {
+                        if (sens.u === "°C") {
+                            let ds = charts[id].data.datasets.find(set => set.label === sens.n);
+                            if (!ds) {
+                                let color = index === 0 ? '#e74c3c' : (index === 1 ? '#3498db' : '#f1c40f');
+                                charts[id].data.datasets.push({ label: sens.n, borderColor: color, data: [], tension: 0.3, pointRadius: 2 });
+                                ds = charts[id].data.datasets[charts[id].data.datasets.length -1];
+                            }
+                            ds.data.push(st.data[sens.id]);
+                        }
+                    });
+
+                    if (charts[id].data.labels.length > maxDataPoints) {
+                        charts[id].data.labels.shift();
+                        charts[id].data.datasets.forEach(dataset => dataset.data.shift());
+                    }
+                    charts[id].update();
+                }
+            }
+        }
+
+        // ==========================================
+        // RÉCUPÉRATION CLOUD (DWEET.IO - PORT 443)
+        // ==========================================
+        function fetchCloudData() {
+            // On interroge les 3 stations
+            [1, 2, 3].forEach(stationId => {
+                let url = `https://dweet.io/get/latest/dweet/for/projet_etudiant_st${stationId}`;
+                
+                fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if(data.this === "succeeded" && data.with && data.with.length > 0) {
+                        document.getElementById('mqtt_status').innerText = "Connecté (API HTTP)";
+                        document.getElementById('mqtt_status').className = "ok";
+
+                        let payload = data.with[0].content; // Dweet place notre JSON ici
+                        
+                        if (!state[stationId]) {
+                            state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {} };
+                            webLogState[stationId] = false;
+                            historiqueCSV[stationId] = [];
+                            createStationUI(stationId);
+                        }
+
+                        state[stationId].alive = true;
+                        state[stationId].lastSeen = Date.now();
+                        state[stationId].config = payload.config; 
+                        state[stationId].data = payload.data;
+                    }
+                })
+                .catch(err => {
+                    // Si le réseau bloque ou qu'il n'y a pas de données
+                    console.log("Attente de données pour la station", stationId);
+                });
+            });
+        }
+
+        // --- LES DEUX BOUCLES PRINCIPALES DÉTACHÉES ---
+        // 1. Rafraichissement de l'interface graphique (toutes les secondes)
+        setInterval(updateUI, 1000);
+        
+        // 2. Interrogation d'Internet (toutes les 2.5 secondes)
+        setInterval(fetchCloudData, 2500);
+
+    </script>
+</body>
+</html>
