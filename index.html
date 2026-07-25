@@ -227,25 +227,35 @@
         });
 
         client.on('message', function (topic, message) {
-            let topicParts = topic.split('/');
-            
-            if (topicParts.length === 3 && topicParts[2] === 'json') {
-                let stationId = topicParts[1].replace('station', '');
+            try {
+                let msgStr = message.toString();
+                // Tu peux décommenter la ligne ci-dessous si tu veux voir les messages bruts (F12)
+                // console.log("Reçu sur", topic, ":", msgStr); 
+
+                let topicParts = topic.split('/');
                 
-                // Parse le JSON envoyé par l'AtomS3
-                let payload = JSON.parse(message.toString());
+                if (topicParts.length === 3 && topicParts[2] === 'json') {
+                    let stationId = topicParts[1].replace('station', '');
+                    
+                    // On lit le JSON reçu
+                    let payload = JSON.parse(msgStr);
 
-                if (!state[stationId]) {
-                    state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {} };
-                    webLogState[stationId] = false;
-                    historiqueCSV[stationId] = [];
-                    createStationUI(stationId);
+                    // Si c'est la première fois qu'on voit cette station, on crée l'interface
+                    if (!state[stationId]) {
+                        state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {} };
+                        webLogState[stationId] = false;
+                        historiqueCSV[stationId] = [];
+                        createStationUI(stationId);
+                    }
+
+                    // Mise à jour de la mémoire
+                    state[stationId].alive = true;
+                    state[stationId].lastSeen = Date.now();
+                    state[stationId].config = payload.config; 
+                    state[stationId].data = payload.data;     
                 }
-
-                state[stationId].alive = true;
-                state[stationId].lastSeen = Date.now();
-                state[stationId].config = payload.config; // Le nom et l'unité des capteurs
-                state[stationId].data = payload.data;     // Les valeurs brutes
+            } catch (erreur) {
+                console.error("Le JSON reçu est malformé ou trop gros :", erreur);
             }
         });
 
