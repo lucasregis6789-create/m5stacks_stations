@@ -15,19 +15,10 @@
         .ok { color: #2ecc71; font-weight: bold; } 
         .err { color: #e74c3c; font-weight: bold; }
         .warning { color: #f39c12; font-weight: bold; }
-        
-        .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-right: 10px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
-        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: #0055ff; } 
-        input:checked + .slider:before { transform: translateX(20px); }
-        
         .station-body { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px; }
         .col { flex: 1; min-width: 280px; }
         .header-panel { display:flex; justify-content:center; align-items:center; margin-bottom:20px; }
         .header-box { background:white; padding:15px 25px; border-radius:8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display:flex; gap:20px; align-items:center; font-size:16px; }
-        
         .btn-row { display: flex; gap: 10px; margin-top: 15px; }
         .btn-action { color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size:12px; flex: 1; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
         .btn-action:hover { opacity: 0.8; transform: scale(0.98); }
@@ -35,11 +26,17 @@
         .btn-stop { background: #e67e22; }
         .btn-clear { background: #e74c3c; }
         .btn-dl { background: #2ecc71; width: 100%; margin-top: 10px; }
+        .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-right: 10px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #0055ff; } 
+        input:checked + .slider:before { transform: translateX(20px); }
     </style>
 </head>
 <body>
 
-    <h1>Console SERVEUR IoT <span style="color: #e74c3c; font-size: 0.6em;">(ACCÈS DISTANT)</span></h1>
+    <h1>Console SERVEUR IoT <span style="color: #e74c3c; font-size: 0.6em;">(ACCÈS DISTANT MQTT)</span></h1>
 
     <div class="header-panel">
         <div class="header-box">
@@ -52,31 +49,24 @@
     <div class='container' id='main_container'></div>
 
     <script>
-        // Fonction pour générer un état vierge
-        function getInitialState() {
-            return { active: true, alive: false, lastSeen: 0, lastRecorded: 0, temp: '--', hum: '--', c30: '--', c40: '--', no2: '--', co: '--', voc: '--', alc: '--', lm32: '--' };
-        }
-
-        // On initialise les stations 1, 2 et 3 "en dur"
-        let state = { '1': getInitialState(), '2': getInitialState(), '3': getInitialState() };
-        let webLogState = { '1': false, '2': false, '3': false };
-        let historiqueCSV = { '1': [], '2': [], '3': [] };
-        
+        // Le stockage "Universel"
+        let state = {}; 
+        let webLogState = {}; 
+        let historiqueCSV = {}; 
         const maxDataPoints = 60; 
         let charts = {};
 
-        // Génère le code HTML d'une station et l'injecte dans la page
+        // Génère le code HTML d'une station de manière dynamique
         function createStationUI(id) {
             let container = document.getElementById("main_container");
             
             let html = `
             <div class="card" id="station_block_${id}">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h2 style="margin:0; text-transform: capitalize;">Station ${id} <span id="st${id}_status" style="font-size:14px; font-weight:normal; margin-left:15px;">- En attente de données...</span></h2>
+                    <h2 style="margin:0; text-transform: capitalize;">Station ${id} <span id="st${id}_status" style="font-size:14px; font-weight:normal; margin-left:15px;">- Connexion établie !</span></h2>
                     <div style="display:flex; align-items:center;">
                         <b style="margin-right:10px;">Afficher</b>
-                        <!-- Les identifiants (id) sont maintenant passés sous forme de chaînes de caractères ('${id}') -->
-                        <label class="switch"><input type="checkbox" checked onchange="toggleStation('${id}', this.checked)"><span class="slider"></span></label>
+                        <label class="switch"><input type="checkbox" checked onchange="document.getElementById('st${id}_content').style.display = this.checked ? 'flex' : 'none'"><span class="slider"></span></label>
                     </div>
                 </div>
 
@@ -101,45 +91,24 @@
             
             container.insertAdjacentHTML('beforeend', html);
 
-            // Initialisation du graphique pour cette nouvelle station
             let ctx = document.getElementById('chart_st'+id).getContext('2d');
             charts[id] = new Chart(ctx, {
                 type: 'line',
-                data: {
-                    labels: [], 
-                    datasets: [
-                        { label: 'Temp SHT3X (°C)', borderColor: '#e74c3c', data: [], tension: 0.3, pointRadius: 2 },
-                        { label: 'Temp LM32 (°C)', borderColor: '#3498db', data: [], tension: 0.3, pointRadius: 2 }
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, animation: false, 
-                    scales: { y: { suggestedMin: 15, suggestedMax: 35 } } 
-                }
+                data: { labels: [], datasets: [] }, // Le graph se construira tout seul !
+                options: { responsive: true, maintainAspectRatio: false, animation: false }
             });
         }
 
-        // Construit les 3 stations de base au lancement
-        function buildInitialUI() {
-            createStationUI('1');
-            createStationUI('2');
-            createStationUI('3');
-        }
-
-        // Mettre en pause ou reprendre l'enregistrement web
         function toggleWebLog(id) {
             webLogState[id] = !webLogState[id];
             let btn = document.getElementById('btn_weblog_' + id);
             if (webLogState[id]) {
-                btn.innerHTML = 'Arrêter stockage';
-                btn.className = 'btn-action btn-stop';
+                btn.innerHTML = 'Arrêter stockage'; btn.className = 'btn-action btn-stop';
             } else {
-                btn.innerHTML = 'Démarrer stockage';
-                btn.className = 'btn-action btn-start';
+                btn.innerHTML = 'Démarrer stockage'; btn.className = 'btn-action btn-start';
             }
         }
 
-        // Vider la mémoire RAM de la station
         function clearWebLog(id) {
             if (confirm(`Voulez-vous vraiment vider la mémoire Web de la Station ${id} ?`)) {
                 historiqueCSV[id] = [];
@@ -147,139 +116,127 @@
             }
         }
 
+        // Le CSV devient Universel ! Il lit la config JSON pour créer l'en-tête automatiquement
         function exportCSV(id) {
             if (historiqueCSV[id].length === 0) {
                 alert("Aucune donnée à télécharger pour l'instant.");
                 return;
             }
-            let csvContent = "Heure;SHT3X_Temp;SHT3X_Hum;SCD30_CO2;SCD40_CO2;NO2;CO;VOC;ALC;LM32_Temp\n";
+            let st = state[id];
+            
+            let csvContent = "Heure";
+            if (st.config && st.config.sensors) {
+                st.config.sensors.forEach(sens => {
+                    csvContent += `;${sens.n} (${sens.u})`;
+                });
+            }
+            csvContent += "\n";
+
             historiqueCSV[id].forEach(row => {
-                csvContent += `${row.time};${row.t};${row.h};${row.c30};${row.c40};${row.no2};${row.co};${row.voc};${row.alc};${row.lm}\n`;
+                csvContent += row.time;
+                if (st.config && st.config.sensors) {
+                    st.config.sensors.forEach(sens => {
+                        let val = row.data[sens.id] !== undefined ? row.data[sens.id] : "";
+                        csvContent += `;${val}`;
+                    });
+                }
+                csvContent += "\n";
             });
+
             let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            let url = URL.createObjectURL(blob);
             let link = document.createElement("a");
-            link.setAttribute("href", url);
+            link.setAttribute("href", URL.createObjectURL(blob));
             link.setAttribute("download", `Historique_Web_Station_${id}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
         }
 
-        function toggleStation(id, isVisible) {
-            state[id].active = isVisible;
-            document.getElementById('st' + id + '_content').style.display = isVisible ? 'flex' : 'none';
-        }
-
         function updateUI() {
-            let now = new Date();
-            let timeStr = now.toLocaleTimeString('fr-FR');
+            let timeStr = new Date().toLocaleTimeString('fr-FR');
             document.getElementById('sys_time').innerText = timeStr;
-
             let currentMillis = Date.now();
 
-            // Boucle dynamique sur toutes les stations connues (1, 2, 3, CO2, 4...)
             for (let id in state) {
                 let st = state[id];
-                if (st.alive && (currentMillis - st.lastSeen > 10000)) {
-                    st.alive = false;
-                }
+                if (st.alive && (currentMillis - st.lastSeen > 10000)) st.alive = false;
 
-                // GESTION DU STOCKAGE EN ARRIÈRE-PLAN
+                // Enregistrement CSV en arrière-plan
                 if (st.alive && st.lastSeen !== st.lastRecorded) {
                     if (webLogState[id]) {
                         historiqueCSV[id].push({
                             time: timeStr,
-                            t: st.temp !== '--' ? st.temp : "",
-                            h: st.hum !== '--' ? st.hum : "",
-                            c30: st.c30 !== '--' ? st.c30 : "",
-                            c40: st.c40 !== '--' ? st.c40 : "",
-                            no2: st.no2 !== '--' ? st.no2 : "",
-                            co: st.co !== '--' ? st.co : "",
-                            voc: st.voc !== '--' ? st.voc : "",
-                            alc: st.alc !== '--' ? st.alc : "",
-                            lm: st.lm32 !== '--' ? st.lm32 : ""
+                            data: { ...st.data } // Copie propre des données brutes
                         });
-                    }
-                    st.lastRecorded = st.lastSeen;
-                    
-                    if(st.active) {
                         document.getElementById('st'+id+'_compteur').innerText = historiqueCSV[id].length + " points en mémoire";
                     }
+                    st.lastRecorded = st.lastSeen;
                 }
 
-                // AFFICHAGE DU GRAPHIQUE
-                if (charts[id] && st.alive) {
+                let isAliveHtml = st.alive ? "<span class='ok'>Connectée (En direct)</span>" : "<span class='err'>Hors Ligne (Signal perdu)</span>";
+                document.getElementById('st' + id + '_status').innerHTML = "- " + isAliveHtml;
+
+                // Affichage Texte
+                let dataHTML = "";
+                if (st.config && st.config.sensors) {
+                    st.config.sensors.forEach(sens => {
+                        let val = st.data[sens.id] !== undefined ? st.data[sens.id] : "--";
+                        dataHTML += `<p><b>${sens.n}</b> : ${val} ${sens.u}</p>`;
+                    });
+                }
+                if (dataHTML === "") dataHTML = "<i>En attente des capteurs...</i>";
+                document.getElementById('st' + id + '_data').innerHTML = dataHTML;
+
+                // Affichage Graphique Universel (trace tout ce qui est en °C)
+                if (charts[id] && st.alive && st.config && st.config.sensors) {
                     charts[id].data.labels.push(timeStr);
-                    let tSht = st.temp !== '--' ? parseFloat(st.temp) : null;
-                    let tLm = st.lm32 !== '--' ? parseFloat(st.lm32) : null;
                     
-                    charts[id].data.datasets[0].data.push(tSht);
-                    charts[id].data.datasets[1].data.push(tLm);
+                    st.config.sensors.forEach((sens, index) => {
+                        if (sens.u === "°C") {
+                            let ds = charts[id].data.datasets.find(set => set.label === sens.n);
+                            if (!ds) {
+                                let color = index === 0 ? '#e74c3c' : (index === 1 ? '#3498db' : '#f1c40f');
+                                charts[id].data.datasets.push({ label: sens.n, borderColor: color, data: [], tension: 0.3, pointRadius: 2 });
+                                ds = charts[id].data.datasets[charts[id].data.datasets.length -1];
+                            }
+                            ds.data.push(st.data[sens.id]);
+                        }
+                    });
 
                     if (charts[id].data.labels.length > maxDataPoints) {
                         charts[id].data.labels.shift();
-                        charts[id].data.datasets[0].data.shift();
-                        charts[id].data.datasets[1].data.shift();
+                        charts[id].data.datasets.forEach(dataset => dataset.data.shift());
                     }
                     charts[id].update();
                 }
-
-                if (!st.active) continue;
-
-                let isAliveHtml = st.alive ? "<span class='ok'>Connectée (En direct)</span>" : "<span class='err'>Hors Ligne (Signal perdu)</span>";
-                document.getElementById('st' + id + '_status').innerHTML = "- WiFi: " + isAliveHtml;
-
-                let dataHTML = "";
-                if (st.temp !== '--') dataHTML += `<p><b>SHT3X</b> : ${st.temp}°C | ${st.hum}%</p>`;
-                if (st.c30 !== '--') dataHTML += `<p><b>SCD30</b> : ${parseFloat(st.c30).toFixed(0)} ppm</p>`;
-                if (st.c40 !== '--') dataHTML += `<p><b>SCD40</b> : ${st.c40} ppm</p>`;
-                if (st.no2 !== '--') dataHTML += `<p><b>GAS</b> : NO2:${st.no2} CO:${st.co} VOC:${st.voc}</p>`;
-                if (st.lm32 !== '--') dataHTML += `<p><b>LM32</b> : ${st.lm32}°C</p>`;
-
-                if (dataHTML === "") dataHTML = "<i>En attente des premiers capteurs...</i>";
-                document.getElementById('st' + id + '_data').innerHTML = dataHTML;
             }
         }
 
+        // ==========================================
+        // CONNEXION MQTT
+        // ==========================================
         const clientId = 'web_dashboard_' + Math.random().toString(16).substr(2, 8);
         const host = 'wss://test.mosquitto.org:8081/mqtt';
 
-        const options = { keepalive: 60, clientId: clientId, protocolId: 'MQTT', protocolVersion: 4, clean: true, reconnectPeriod: 1000, connectTimeout: 30 * 1000 };
-        const client = mqtt.connect(host, options);
+        const client = mqtt.connect(host, { keepalive: 60, clientId: clientId, protocolVersion: 4, clean: true, reconnectPeriod: 1000 });
 
         client.on('connect', function () {
-            let statusBadge = document.getElementById('mqtt_status');
-            statusBadge.innerText = "Connecté";
-            statusBadge.className = "ok";
-            client.subscribe('mon_projet_etudiant/#');
-        });
-
-        client.on('error', function (error) {
-            let statusBadge = document.getElementById('mqtt_status');
-            statusBadge.innerText = "Erreur Serveur";
-            statusBadge.className = "err";
-        });
-
-        client.on('offline', function () {
-            let statusBadge = document.getElementById('mqtt_status');
-            statusBadge.innerText = "Déconnecté";
-            statusBadge.className = "err";
+            document.getElementById('mqtt_status').innerText = "Connecté";
+            document.getElementById('mqtt_status').className = "ok";
+            client.subscribe('mon_projet_etudiant/+/json'); // On écoute toutes les stations, mais uniquement le topic JSON !
         });
 
         client.on('message', function (topic, message) {
             let topicParts = topic.split('/');
-            // Si le topic correspond bien à la structure : mon_projet_etudiant/stationXYZ/capteur
-            if (topicParts.length === 3 && topicParts[0] === 'mon_projet_etudiant') {
-                
-                // Extrait tout ce qu'il y a après le mot "station" (ex: "4", "CO2", "Exterieur")
+            
+            if (topicParts.length === 3 && topicParts[2] === 'json') {
                 let stationId = topicParts[1].replace('station', '');
-                let sensorName = topicParts[2];
-                let value = message.toString();
+                
+                // Parse le JSON envoyé par l'AtomS3
+                let payload = JSON.parse(message.toString());
 
-                // NOUVEAUTÉ : Si cette station n'existe pas encore, on la crée dynamiquement !
                 if (!state[stationId]) {
-                    state[stationId] = getInitialState();
+                    state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {} };
                     webLogState[stationId] = false;
                     historiqueCSV[stationId] = [];
                     createStationUI(stationId);
@@ -287,21 +244,11 @@
 
                 state[stationId].alive = true;
                 state[stationId].lastSeen = Date.now();
-
-                if (sensorName === 'temp') state[stationId].temp = value;
-                else if (sensorName === 'hum') state[stationId].hum = value;
-                else if (sensorName === 'co2_scd30') state[stationId].c30 = value;
-                else if (sensorName === 'co2_scd40') state[stationId].c40 = value;
-                else if (sensorName === 'no2') state[stationId].no2 = value;
-                else if (sensorName === 'co') state[stationId].co = value;
-                else if (sensorName === 'voc') state[stationId].voc = value;
-                else if (sensorName === 'alc') state[stationId].alc = value;
-                else if (sensorName === 'lm32') state[stationId].lm32 = value;
+                state[stationId].config = payload.config; // Le nom et l'unité des capteurs
+                state[stationId].data = payload.data;     // Les valeurs brutes
             }
         });
 
-        // Au lancement de la page
-        buildInitialUI();
         setInterval(updateUI, 1000);
     </script>
 </body>
