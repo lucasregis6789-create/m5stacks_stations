@@ -217,7 +217,7 @@
         function fetchCloudData() {
             // On interroge les 3 stations
             [1, 2, 3].forEach(stationId => {
-                let url = `https://dweet.me/get/latest/dweet/for/projet_etudiant_st${stationId}`;
+                let url = `https://dweet.cc/get/latest/dweet/for/projet_etudiant_st${stationId}`;
                 
                 fetch(url)
                 .then(response => response.json())
