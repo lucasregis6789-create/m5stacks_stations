@@ -226,7 +226,15 @@
                         document.getElementById('mqtt_status').innerText = "Connecté (API HTTP)";
                         document.getElementById('mqtt_status').className = "ok";
 
-                        let payload = data.with[0].content; // Dweet place notre JSON ici
+                        let dweetContent = data.with[0].content;
+                        
+                        let payload;
+                        // On déballe notre JSON caché dans la variable "message" !
+                        if (dweetContent.message) {
+                            payload = JSON.parse(dweetContent.message);
+                        } else {
+                            payload = dweetContent;
+                        }
                         
                         if (!state[stationId]) {
                             state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {} };
