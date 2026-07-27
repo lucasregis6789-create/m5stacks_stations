@@ -48,6 +48,12 @@
     <div class='container' id='main_container'></div>
 
     <script>
+        // ==========================================
+        // CONFIGURATION DES STATIONS À SURVEILLER
+        // Ajoute ici toutes les stations (numéros ou textes)
+        // ==========================================
+        const stationsToMonitor = ['1', '2', '3', 'bac'];
+
         // Le stockage "Universel"
         let state = {}; 
         let webLogState = {}; 
@@ -186,12 +192,12 @@
                 if (dataHTML === "") dataHTML = "<i>En attente des capteurs...</i>";
                 document.getElementById('st' + id + '_data').innerHTML = dataHTML;
 
-                // Affichage Graphique Universel (trace tout ce qui est en °C)
+                // Affichage Graphique Universel (trace tout ce qui est en °C ou C)
                 if (charts[id] && st.alive && st.config && st.config.sensors) {
                     charts[id].data.labels.push(timeStr);
                     
                     st.config.sensors.forEach((sens, index) => {
-                        if (sens.u === "°C") {
+                        if (sens.u === "°C" || sens.u === "C") {
                             let ds = charts[id].data.datasets.find(set => set.label === sens.n);
                             if (!ds) {
                                 let color = index === 0 ? '#e74c3c' : (index === 1 ? '#3498db' : '#f1c40f');
@@ -212,11 +218,11 @@
         }
 
         // ==========================================
-        // RÉCUPÉRATION CLOUD (.IO - PORT 443)
+        // RÉCUPÉRATION CLOUD (DWEET.CC - PORT 443)
         // ==========================================
         function fetchCloudData() {
-            // On interroge les 3 stations
-            [1, 2, 3].forEach(stationId => {
+            // Utilisation du tableau dynamique défini en haut du script
+            stationsToMonitor.forEach(stationId => {
                 let url = `https://dweet.cc/get/latest/dweet/for/projet_etudiant_st${stationId}`;
                 
                 fetch(url)
