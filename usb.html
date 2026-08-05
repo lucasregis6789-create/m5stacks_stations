@@ -196,14 +196,29 @@
                 if (charts[id] && st.alive && st.config && st.config.sensors) {
                     charts[id].data.labels.push(timeStr);
                     
-                    st.config.sensors.forEach((sens, index) => {
+                    // Une belle palette de couleurs (Rouge, Bleu, Vert, Jaune, Violet, Orange)
+                    const chartColors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22'];
+                    
+                    st.config.sensors.forEach((sens) => { // Plus besoin de l'index global ici !
                         if (sens.u === "°C" || sens.u === "C") {
                             let ds = charts[id].data.datasets.find(set => set.label === sens.n);
+                            
+                            // Si la courbe n'existe pas encore, on la crée
                             if (!ds) {
-                                let color = index === 0 ? '#e74c3c' : (index === 1 ? '#3498db' : '#f1c40f');
-                                charts[id].data.datasets.push({ label: sens.n, borderColor: color, data: [], tension: 0.3, pointRadius: 2 });
-                                ds = charts[id].data.datasets[charts[id].data.datasets.length -1];
+                                // On compte combien de courbes on a déjà pour prendre la couleur suivante
+                                let nextColor = chartColors[charts[id].data.datasets.length % chartColors.length];
+                                
+                                charts[id].data.datasets.push({ 
+                                    label: sens.n, 
+                                    borderColor: nextColor, 
+                                    data: [], 
+                                    tension: 0.3, 
+                                    pointRadius: 2 
+                                });
+                                ds = charts[id].data.datasets[charts[id].data.datasets.length - 1];
                             }
+                            
+                            // On ajoute la nouvelle valeur
                             ds.data.push(st.data[sens.id]);
                         }
                     });
@@ -221,7 +236,6 @@
         // RÉCUPÉRATION CLOUD (DWEET.CC - PORT 443)
         // ==========================================
         function fetchCloudData() {
-            // Utilisation du tableau dynamique défini en haut du script
             stationsToMonitor.forEach(stationId => {
                 let url = `https://dweet.cc/get/latest/dweet/for/projet_etudiant_st${stationId}`;
                 
@@ -232,31 +246,37 @@
                         document.getElementById('mqtt_status').innerText = "Connecté (API HTTP)";
                         document.getElementById('mqtt_status').className = "ok";
 
-                        let dweetContent = data.with[0].content;
+                        let dweetData = data.with[0];
+                        let dweetContent = dweetData.content;
+                        let dweetCreated = dweetData.created; // NOUVEAU : Date exacte de création du message
                         
                         let payload;
-                        // On déballe notre JSON caché dans la variable "message" !
                         if (dweetContent.message) {
                             payload = JSON.parse(dweetContent.message);
                         } else {
                             payload = dweetContent;
                         }
                         
+                        // Initialisation de la station si elle n'existe pas encore
                         if (!state[stationId]) {
-                            state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {} };
+                            // On ajoute 'lastDweetTime' dans l'état de la station
+                            state[stationId] = { alive: false, lastSeen: 0, lastRecorded: 0, config: {}, data: {}, lastDweetTime: null };
                             webLogState[stationId] = false;
                             historiqueCSV[stationId] = [];
                             createStationUI(stationId);
                         }
 
-                        state[stationId].alive = true;
-                        state[stationId].lastSeen = Date.now();
-                        state[stationId].config = payload.config; 
-                        state[stationId].data = payload.data;
+                        // LA MAGIE EST ICI : On ne met à jour que si le message est RÉELLEMENT nouveau
+                        if (state[stationId].lastDweetTime !== dweetCreated) {
+                            state[stationId].alive = true;
+                            state[stationId].lastSeen = Date.now(); // On relance notre minuteur de 10 secondes
+                            state[stationId].lastDweetTime = dweetCreated; // On mémorise l'heure de ce message
+                            state[stationId].config = payload.config; 
+                            state[stationId].data = payload.data;
+                        }
                     }
                 })
                 .catch(err => {
-                    // Si le réseau bloque ou qu'il n'y a pas de données
                     console.log("Attente de données pour la station", stationId);
                 });
             });
@@ -267,7 +287,7 @@
         setInterval(updateUI, 1000);
         
         // 2. Interrogation d'Internet (toutes les 2.5 secondes)
-        setInterval(fetchCloudData, 2500);
+        setInterval(fetchCloudData, 2000);
 
     </script>
 </body>
